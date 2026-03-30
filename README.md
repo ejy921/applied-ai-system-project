@@ -4,7 +4,7 @@ You are building **PawPal+**, a Streamlit app that helps a pet owner plan care t
 
 ## Scenario
 
-A busy pet owner needs help staying consistent with pet care. They want an assistant that can:
+A busy pet owner needs help staying consistent with pet care. They want an assistant that demo:
 
 - Track pet care tasks (walks, feeding, meds, enrichment, grooming, etc.)
 - Consider constraints (time available, priority, owner preferences)
@@ -42,6 +42,23 @@ pip install -r requirements.txt
 6. Connect your logic to the Streamlit UI in `app.py`.
 7. Refine UML so it matches what you actually built.
 
+
+## Features
+
+- **Priority-based scheduling** — Tasks are sorted by priority (high > medium > low), with ties broken by shortest duration first, then packed into the owner's daily time budget using a greedy algorithm.
+- **Time-slot assignment** — Each scheduled task receives a start time beginning at 8:00 AM, with tasks placed sequentially so the owner knows exactly when to do what.
+- **Conflict detection** — The scheduler checks all task pairs for overlapping time slots and flags any conflicts as warnings.
+- **Per-pet fairness (round-robin)** — Tasks are selected in a round-robin across pets so that no single pet's tasks dominate the schedule, even under a tight time budget.
+- **Frequency filtering** — Tasks track their `last_completed` date. Weekly and monthly tasks are automatically skipped on days they aren't due, preventing over-scheduling.
+- **Daily/weekly recurrence** — When a task is marked complete, a new instance is auto-created with the correct next `due_date` (e.g., tomorrow for daily, +7 days for weekly).
+- **Special needs auto-tasks** — Adding a special need to a pet (e.g., "joint supplement") automatically generates a corresponding high-priority meds task if one doesn't already exist.
+- **Filtering and sorting** — Tasks can be filtered by completion status and/or pet name, and any task list can be sorted by priority and duration on demand.
+- **Plan explanation** — The scheduler explains why each task was included and lists any tasks that were skipped due to the time budget.
+
+
+## Demo
+
+<a href="demo.png" target="_blank"><img src='demo.png' title='PawPal App' width='' alt='PawPal App' class='center-block' /></a>.
 
 ## Testing PawPal+
 
