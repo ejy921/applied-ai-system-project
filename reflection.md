@@ -2,6 +2,10 @@
 
 ## 1. System Design
 
+- adding user information, including available time and preferences
+- adding tasks to do, including duration, priority, and frequency
+- seeing today's tasks that is given by the program
+
 **a. Initial design**
 
 - Briefly describe your initial UML design.
