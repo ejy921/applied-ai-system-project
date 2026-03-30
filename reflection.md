@@ -43,8 +43,7 @@ Methods: generate plan — sorts/filters tasks by priority and fits them into av
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The scheduler uses a greedy algorithm — it sorts tasks by priority and duration, then packs them into the time budget one by one until it runs out of room. This means it always picks the "best-looking" next task, but it can miss a better overall combination. For example, if there are 20 minutes left and the next candidate is a 25-minute medium-priority task, the scheduler skips it — even though dropping a 10-minute task already in the plan and swapping in both a 15-minute and a 10-minute task might cover more ground. A true optimal solution would require checking every possible combination (a knapsack problem), which gets expensive fast. The greedy approach is a reasonable tradeoff here because pet care schedules are small (typically under 20 tasks), the stakes are low if a low-priority task gets bumped, and the owner can always adjust manually.
 
 ---
 

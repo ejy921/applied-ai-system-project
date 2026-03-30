@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 
 PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
+
+FREQUENCY_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
 
 
 @dataclass
@@ -10,8 +13,10 @@ class Task:
     category: str  # walk, feeding, grooming, meds, enrichment
     duration: int  # minutes
     priority: str  # high, medium, low
-    frequency: str = "daily"  # daily, weekly, etc.
+    frequency: str = "daily"  # daily, weekly, monthly
     completed: bool = False
+    last_completed: date | None = None
+    due_date: date | None = None
 
     def edit_task(self, **kwargs):
         """Update one or more task attributes by keyword."""
@@ -28,11 +33,33 @@ class Task:
             "priority": self.priority,
             "frequency": self.frequency,
             "completed": self.completed,
+            "last_completed": str(self.last_completed) if self.last_completed else None,
+            "due_date": str(self.due_date) if self.due_date else None,
         }
 
-    def mark_complete(self):
-        """Mark the task as completed."""
+    def mark_complete(self) -> "Task | None":
+        """Mark the task as completed and return a new Task for the next occurrence."""
         self.completed = True
+        self.last_completed = date.today()
+        interval = FREQUENCY_DAYS.get(self.frequency)
+        if interval is None:
+            return None
+        next_due = date.today() + timedelta(days=interval)
+        return Task(
+            name=self.name,
+            category=self.category,
+            duration=self.duration,
+            priority=self.priority,
+            frequency=self.frequency,
+            due_date=next_due,
+        )
+
+    def is_due_today(self) -> bool:
+        """Check if enough days have passed since last completion for this task to be due."""
+        if self.last_completed is None:
+            return True
+        interval = FREQUENCY_DAYS.get(self.frequency, 1)
+        return (date.today() - self.last_completed) >= timedelta(days=interval)
 
 
 @dataclass
@@ -65,6 +92,16 @@ class Pet:
     def get_tasks(self) -> list[Task]:
         """Return a copy of this pet's task list."""
         return list(self.tasks)
+
+    def generate_needs_tasks(self):
+        """Auto-create a meds task for each special need that lacks one."""
+        existing_names = {t.name.lower() for t in self.tasks}
+        for need in self.special_needs:
+            if need.lower() not in existing_names:
+                self.tasks.append(Task(
+                    name=need, category="meds",
+                    duration=5, priority="high", frequency="daily",
+                ))
 
 
 @dataclass
@@ -111,23 +148,66 @@ class Scheduler:
         self.owner = owner
         self.plan: list[Task] = []
 
+    def mark_task_complete(self, task: Task):
+        """Mark a task complete and add its next occurrence to the owning pet."""
+        next_task = task.mark_complete()
+        if next_task is not None:
+            for pet in self.owner.pets:
+                if task in pet.tasks:
+                    pet.add_task(next_task)
+                    return next_task
+        return None
+
     def gather_tasks(self) -> list[Task]:
         """Collect all tasks from every pet the owner has."""
         return self.owner.get_all_tasks()
 
-    def generate_plan(self) -> list[Task]:
-        """Build a prioritized schedule that fits the owner's time budget."""
-        all_tasks = [t for t in self.gather_tasks() if not t.completed]
-        # Sort by priority (high first), then by duration (shorter first)
-        all_tasks.sort(key=lambda t: (PRIORITY_RANK.get(t.priority, 99), t.duration))
+    def filter_tasks(self, completed: bool | None = None, pet_name: str | None = None) -> list[Task]:
+        """Filter tasks by completion status and/or pet name."""
+        results = []
+        for pet in self.owner.pets:
+            if pet_name is not None and pet.name.lower() != pet_name.lower():
+                continue
+            for task in pet.get_tasks():
+                if completed is not None and task.completed != completed:
+                    continue
+                results.append(task)
+        return results
 
+    def sort_tasks(self, tasks: list[Task]) -> list[Task]:
+        """Sort tasks by priority (high first), then duration (shortest first)."""
+        return sorted(tasks, key=lambda t: (PRIORITY_RANK.get(t.priority, 99), t.duration))
+
+    def generate_plan(self) -> list[Task]:
+        """Build a prioritized, fair schedule that fits the owner's time budget."""
+        # Per-pet task queues, filtered by due today and not completed
+        pet_queues: list[list[Task]] = []
+        for pet in self.owner.pets:
+            queue = [t for t in pet.get_tasks() if not t.completed and t.is_due_today()]
+            queue.sort(key=lambda t: (PRIORITY_RANK.get(t.priority, 99), t.duration))
+            if queue:
+                pet_queues.append(queue)
+
+        # Round-robin across pets so no pet gets starved
         budget = self.owner.get_availability()
         self.plan = []
         used = 0
-        for task in all_tasks:
-            if used + task.duration <= budget:
-                self.plan.append(task)
-                used += task.duration
+        while pet_queues:
+            exhausted = []
+            for i, queue in enumerate(pet_queues):
+                while queue:
+                    task = queue.pop(0)
+                    if used + task.duration <= budget:
+                        self.plan.append(task)
+                        used += task.duration
+                        break  # move to next pet
+                else:
+                    exhausted.append(i)
+            for i in reversed(exhausted):
+                pet_queues.pop(i)
+            if not pet_queues:
+                break
+
         return list(self.plan)
 
     def get_plan_summary(self) -> str:
