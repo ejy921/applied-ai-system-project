@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 from pawpal_system import Owner, Pet, Task, Scheduler
 
@@ -13,6 +14,10 @@ if "owner" not in st.session_state:
     st.session_state.owner = Owner(name="Jordan", available_time=60)
 if "scheduler" not in st.session_state:
     st.session_state.scheduler = None
+if "agent" not in st.session_state:
+    st.session_state.agent = None
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = []
 
 owner = st.session_state.owner
 
@@ -30,6 +35,41 @@ with col_time:
         value=owner.available_time,
     )
     owner.set_availability(int(available_time))
+
+st.divider()
+
+# =====================
+# AI ASSISTANT
+# =====================
+st.subheader("AI Assistant")
+st.caption("Describe your pets and their care needs in plain English")
+
+_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+if not _api_key:
+    st.warning(
+        "Set the `ANTHROPIC_API_KEY` environment variable to enable the AI assistant. "
+        "You can still use the manual forms below."
+    )
+else:
+    from agent import PawPalAgent
+
+    if st.session_state.agent is None:
+        st.session_state.agent = PawPalAgent(owner)
+
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    if user_input := st.chat_input("e.g. 'My dog Max needs a walk and feeding, I have 45 minutes'"):
+        st.session_state.chat_messages.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        with st.chat_message("assistant"):
+            with st.spinner("Planning..."):
+                reply = st.session_state.agent.chat(user_input)
+            st.markdown(reply)
+        st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+        st.rerun()
 
 st.divider()
 
