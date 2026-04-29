@@ -22,6 +22,8 @@ I also changed Owner to hold a list of pets instead of just one. The original 1-
 
 The other big addition was all the date/time stuff. Originally Task didn't track when it was last completed or when its next due, so there was no way to handle recurring tasks properly. Adding last_completed, due_date, and scheduled_time made the whole frequency system actually work.
 
+The final additions were the AI layer: PawPalAgent (an agentic loop powered by Gemini with function calling) and KnowledgeBase (a RAG retrieval module with 12 tagged pet care entries). These sit on top of the existing data model — the agent creates the same Owner, Pet, and Task objects as the manual UI, so both paths share live state.
+
 ---
 
 ## 2. Scheduling Logic and Tradeoffs
@@ -38,25 +40,23 @@ There's also a fairness component — the scheduler round-robins between pets so
 
 **b. Tradeoffs**
 
-The scheduler uses a greedy algorithm — it sorts tasks by priority and duration, then packs them into the time budget one by one until it runs out of room. This means it always picks the "best-looking" next task, but it can miss a better overall combination. For example, if there are 20 minutes left and the next candidate is a 25-minute medium-priority task, the scheduler skips it — even though dropping a 10-minute task already in the plan and swapping in both a 15-minute and a 10-minute task might cover more ground. A true optimal solution would require checking every possible combination (a knapsack problem), which gets expensive fast. The greedy approach is a reasonable tradeoff here because pet care schedules are small (typically under 20 tasks), the stakes are low if a low-priority task gets bumped, and the owner can always adjust manually.
+The scheduler uses a greedy algorithm — it sorts tasks by priority and duration, then packs them into the time budget one by one until it runs out of room. This means it always picks the "best-looking" next task, but it can miss a better overall combination. A true optimal solution would require checking every possible combination (a knapsack problem), which gets expensive fast. The greedy approach is a reasonable tradeoff here because pet care schedules are small (typically under 20 tasks), the stakes are low if a low-priority task gets bumped, and the owner can always adjust manually.
 
 ---
 
-## 3. AI Collaboration
+## 3. AI Features
 
-**a. How you used AI**
+**a. Agentic workflow**
 
-I used AI pretty heavily throughout. At the start I had it review my skeleton classes and point out what was missing — that's how I caught that Pet needed to own its tasks and Owner needed to support multiple pets. Those weren't things I had thought about in my initial UML.
+The AI assistant uses Gemini (gemini-2.0-flash) with a multi-turn function-calling loop. When an owner describes their pet in plain English, the agent doesn't try to produce everything in one shot. Instead it calls tools in sequence: first checking current state, then retrieving care guidelines, then adding the pet, then adding tasks one by one, then generating the schedule. Each tool call returns real data from the live system, so the agent's next decision is based on what was actually done rather than what it assumed.
 
-For implementation I'd describe what I wanted (like "add frequency filtering" or "make the scheduler fair across pets") and let it write the code, then I'd read through it to make sure I understood what it did. The most helpful prompts were when I asked it to suggest improvements and then asked which ones actually mattered. It gave me seven ideas but helped me narrow down to the three that would make the biggest difference instead of trying to do everything.
+The key design decision was wiring the agent's tools directly to the same Owner, Pet, and Task objects used by the manual UI — not a separate copy. That means anything the agent creates instantly appears in the schedule section and the filter/complete section below the chat. There's no sync step because there's nothing to sync.
 
-I also had it generate all my tests. I asked "what are the most important edge cases" first, reviewed the list, and then told it to turn them into actual pytest cases. That was faster than writing them from scratch and it caught things I probably wouldn't have thought of like the "complete same task twice" case.
+**b. Retrieval-Augmented Generation (RAG)**
 
-**b. Judgment and verification**
+Before the agent decides what tasks to create for a pet, it calls get_pet_care_info, which runs KnowledgeBase.retrieve(). That function builds a tag set from the pet's species, age group, and any condition keywords, then returns all knowledge base entries whose tags intersect. The retrieved text is sent back to Gemini, which uses it to set task parameters — so a senior dog with arthritis gets 15-minute walks instead of the 20-minute default, because the knowledge base says "10-15 min gentle walks" for that case.
 
-When AI suggested seven improvements to the scheduler, I didn't just implement all of them. I pushed back and asked which ones would actually make a significant difference. It narrowed it down to three — frequency filtering, per-pet fairness, and special needs auto-tasks — and explained why the others were either cosmetic or scope creep. That felt right to me so I went with those three.
-
-I also verified things by running the code after every change. Like after adding the recurrence logic, I checked main.py output to make sure the due dates were correct and that task counts actually increased. If something looked off in the terminal output I'd go back and read the code more carefully before moving on.
+The knowledge base uses tag matching instead of vector embeddings. For a bounded domain like pet care (12 entries, well-defined categories), tag matching is deterministic and requires no external model. The tradeoff is that unusual phrasings not covered by the tags won't match, but condition keywords are split on spaces so "hip dysplasia" and "arthritis" both resolve to known tags.
 
 ---
 
@@ -75,9 +75,13 @@ I tested 20 different behaviors across six categories:
 
 These tests matter because the scheduler has a lot of moving parts. Without them I wouldn't trust that changing one thing (like the sorting logic) didn't break something else (like the fairness round-robin).
 
-**b. Confidence**
+**b. What isn't tested**
 
-I'd say 4 out of 5. The core logic is solid and the tests cover the important paths. But there are gaps — I haven't tested what happens with a really large number of tasks (like 100+), tasks that run past midnight, or edge cases with the Streamlit UI like rapid button clicking. Those would be next if I had more time.
+The automated test suite covers the rule-based scheduler but not the AI layer. The agentic loop and RAG retrieval are tested manually by running the app and sending messages. Automated tests for the AI would need to mock the Gemini API and assert that the agent calls tools in the right order with the right parameters. That's a meaningful gap — if I extended this project, that would be the first thing I'd add.
+
+**c. Confidence**
+
+I'd say 4 out of 5. The core scheduling logic is solid and the important paths are covered. The missing star is for the untested AI layer and edge cases like a very large task list or tasks that push past midnight.
 
 ---
 
@@ -85,18 +89,22 @@ I'd say 4 out of 5. The core logic is solid and the tests cover the important pa
 
 **a. What went well**
 
-I'm most happy with how the scheduling algorithm came together. The combination of priority sorting, round-robin fairness, frequency filtering, and time slot assignment makes the output feel like a real daily plan rather than just a sorted list. When I run main.py and see the schedule with actual times and clear explanations for why things were skipped, it feels like something that could actually be useful.
+I'm most happy with how the scheduling algorithm came together. The combination of priority sorting, round-robin fairness, frequency filtering, and time slot assignment makes the output feel like a real daily plan rather than just a sorted list.
 
-The test suite also came out better than expected. Having 20 tests that all pass gives me confidence to make changes without worrying about breaking things.
+The AI integration also came out better than expected. The moment it clicked was when I realized the agent should share the same live objects as the manual UI rather than operating in isolation. Once that was true, the chat section stopped feeling like a separate demo and started feeling like a natural alternate input path.
+
+The RAG design was cleaner than I expected for how little infrastructure it required. Twelve entries with explicit tags, a set intersection lookup, and the retrieved text flows directly into the LLM's context. No vector database, no embeddings, and the results are fully deterministic — which makes it easy to reason about and test manually.
 
 **b. What you would improve**
 
-The time slot system is pretty rigid right now — everything starts at 8 AM and goes sequentially. In reality you might want to walk the dog at 7 AM and give meds at 9 PM. Letting the owner set preferred times for certain categories would make it way more practical.
+The time slot system is pretty rigid right now — everything starts at 8 AM and goes sequentially. Letting the owner set preferred times for certain categories would make it more practical.
 
-I'd also want to clean up the Streamlit UI more. It works but it's not the prettiest thing. And the data doesn't persist between sessions since everything lives in session state, so refreshing the browser loses everything.
+I'd also add automated tests for the AI layer — a mock Gemini client that asserts the agent calls get_pet_care_info before add_task, and that the retrieved guidelines actually change the task parameters.
+
+Data persistence is the other obvious gap. Refreshing the browser loses everything because all state lives in Streamlit session state.
 
 **c. Key takeaway**
 
-The biggest thing I learned is that the initial design is never the final design, and that's fine. I started with a simple UML that had obvious flaws (single pet, no task ownership, no dates) but getting that rough version down first made it way easier to iterate. Each time I added a feature, the design naturally evolved. Trying to design the perfect system upfront would have been a waste of time because I didn't know what I needed until I started building it.
+The biggest thing I learned is that the initial design is never the final design, and that's fine. I started with a simple UML that had obvious flaws (single pet, no task ownership, no dates) but getting that rough version down first made it easier to iterate. Each time I added a feature, the design naturally evolved to show what it needed next.
 
-Working with AI taught me that the value isn't in blindly accepting code — it's in having a conversation where you describe what you want, evaluate what comes back, and push back when something doesn't fit. The AI suggested stuff I wouldn't have thought of, but I still had to decide what was worth building and verify it actually worked.
+Adding the AI features taught me that integration matters as much as the features themselves. The agentic workflow and RAG only became genuinely useful when they were wired into the same state as the rest of the app. A standalone AI demo that doesn't affect the schedule would have been interesting but not actually helpful. The constraint of full integration forced cleaner design than I would have done with more freedom.

@@ -44,10 +44,10 @@ st.divider()
 st.subheader("AI Assistant")
 st.caption("Describe your pets and their care needs in plain English")
 
-_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+_api_key = os.environ.get("GEMINI_API_KEY", "")
 if not _api_key:
     st.warning(
-        "Set the `ANTHROPIC_API_KEY` environment variable to enable the AI assistant. "
+        "Set the `GEMINI_API_KEY` environment variable to enable the AI assistant. "
         "You can still use the manual forms below."
     )
 else:

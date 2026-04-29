@@ -57,8 +57,26 @@ classDiagram
         +explain_plan() String
     }
 
+    class KnowledgeBase {
+        <<module>>
+        +List~dict~ ENTRIES
+        +retrieve(species, age, conditions) String
+    }
+
+    class PawPalAgent {
+        -Owner owner
+        -Client _client
+        -Chat _chat
+        +__init__(owner)
+        +_execute_tool(name, args) String
+        +chat(user_message) String
+    }
+
     Owner "1" --> "*" Pet : owns
     Owner "1" --> "1" Scheduler : provides info to
     Pet "1" --> "*" Task : has
     Scheduler "1" --> "*" Task : schedules
+    PawPalAgent --> Owner : reads and modifies
+    PawPalAgent --> Scheduler : calls generate_plan
+    PawPalAgent --> KnowledgeBase : queries retrieve()
 ```

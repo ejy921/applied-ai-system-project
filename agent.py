@@ -1,89 +1,136 @@
 import os
-import anthropic
+from google import genai
+from google.genai import types
 from pawpal_system import Owner, Pet, Task, Scheduler
-
-TOOLS = [
-    {
-        "name": "get_current_state",
-        "description": "Get the current list of pets and their tasks. Call this to understand what is already set up before making changes.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "add_pet",
-        "description": "Add a new pet to the owner's profile.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "species": {"type": "string", "enum": ["dog", "cat", "other"]},
-                "breed": {"type": "string", "description": "Pet's breed, e.g. 'Shiba Inu'"},
-                "age": {"type": "integer"},
-                "special_needs": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Medical conditions or medications, e.g. ['insulin', 'joint supplement']",
-                },
-            },
-            "required": ["name", "species", "breed", "age"],
-        },
-    },
-    {
-        "name": "add_task",
-        "description": (
-            "Add a care task to a specific pet. "
-            "Use sensible defaults: walks=20min/high/daily, feeding=10min/high/daily, "
-            "grooming=15min/medium/weekly, meds=5min/high/daily, enrichment=20min/low/daily."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "pet_name": {"type": "string"},
-                "task_name": {"type": "string"},
-                "category": {
-                    "type": "string",
-                    "enum": ["walk", "feeding", "grooming", "meds", "enrichment"],
-                },
-                "duration": {"type": "integer", "description": "Duration in minutes"},
-                "priority": {"type": "string", "enum": ["high", "medium", "low"]},
-                "frequency": {"type": "string", "enum": ["daily", "weekly", "monthly"]},
-            },
-            "required": ["pet_name", "task_name", "category", "duration", "priority", "frequency"],
-        },
-    },
-    {
-        "name": "generate_schedule",
-        "description": "Generate today's care schedule. Always call this after adding pets and tasks.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-]
+import knowledge_base
 
 _SYSTEM_PROMPT = """You are PawPal+, an AI assistant that helps pet owners plan their daily pet care schedule.
 
-When users describe their situation, proactively set up their pets and tasks — don't ask for every detail. Use these defaults:
+When a user mentions a pet, follow this order:
+1. Call get_pet_care_info with the pet's species, age, and any conditions to retrieve evidence-based care guidelines.
+2. Call add_pet to register the pet.
+3. Call add_task for each task — using the retrieved guidelines to set appropriate durations and priorities.
+4. Call generate_schedule so the user can see the final plan.
+
+Default task values (override with guidelines when available):
 - Walks: 20 min, high priority, daily
 - Feeding: 10 min, high priority, daily
 - Grooming: 15 min, medium priority, weekly
 - Meds/supplements: 5 min, high priority, daily
 - Enrichment/play: 20 min, low priority, daily
 
-Always call generate_schedule at the end so the user can see their plan. Keep responses brief and conversational."""
+Keep responses brief and conversational."""
+
+_TOOLS = [
+    types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="get_current_state",
+                description="Get the current list of pets and their tasks. Call this first to understand what is already set up.",
+            ),
+            types.FunctionDeclaration(
+                name="add_pet",
+                description="Add a new pet to the owner's profile.",
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "name": types.Schema(type=types.Type.STRING),
+                        "species": types.Schema(
+                            type=types.Type.STRING,
+                            enum=["dog", "cat", "other"],
+                        ),
+                        "breed": types.Schema(type=types.Type.STRING),
+                        "age": types.Schema(type=types.Type.INTEGER),
+                        "special_needs": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
+                            description="Medical conditions or medications, e.g. ['insulin']",
+                        ),
+                    },
+                    required=["name", "species", "breed", "age"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="add_task",
+                description=(
+                    "Add a care task to a specific pet. "
+                    "Defaults: walks=20min/high/daily, feeding=10min/high/daily, "
+                    "grooming=15min/medium/weekly, meds=5min/high/daily."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "pet_name": types.Schema(type=types.Type.STRING),
+                        "task_name": types.Schema(type=types.Type.STRING),
+                        "category": types.Schema(
+                            type=types.Type.STRING,
+                            enum=["walk", "feeding", "grooming", "meds", "enrichment"],
+                        ),
+                        "duration": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="Duration in minutes",
+                        ),
+                        "priority": types.Schema(
+                            type=types.Type.STRING,
+                            enum=["high", "medium", "low"],
+                        ),
+                        "frequency": types.Schema(
+                            type=types.Type.STRING,
+                            enum=["daily", "weekly", "monthly"],
+                        ),
+                    },
+                    required=["pet_name", "task_name", "category", "duration", "priority", "frequency"],
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="generate_schedule",
+                description="Generate today's care schedule. Always call this after adding pets and tasks.",
+            ),
+            types.FunctionDeclaration(
+                name="get_pet_care_info",
+                description=(
+                    "Retrieve evidence-based care guidelines for a pet from the knowledge base. "
+                    "Call this before adding tasks for any new pet so task durations and priorities "
+                    "are informed by the pet's species, age, and conditions."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "species": types.Schema(
+                            type=types.Type.STRING,
+                            description="Pet species, e.g. 'dog' or 'cat'",
+                        ),
+                        "age": types.Schema(
+                            type=types.Type.INTEGER,
+                            description="Pet age in years",
+                        ),
+                        "conditions": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
+                            description="Medical conditions or special needs, e.g. ['arthritis', 'insulin']",
+                        ),
+                    },
+                    required=["species", "age", "conditions"],
+                ),
+            ),
+        ]
+    )
+]
 
 
 class PawPalAgent:
     def __init__(self, owner: Owner):
         self.owner = owner
-        self.client = anthropic.Anthropic()
-        self.history = []
+        self._client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        self._chat = self._client.chats.create(
+            model="gemini-2.0-flash",
+            config=types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                tools=_TOOLS,
+            ),
+        )
 
-    def _execute_tool(self, name: str, tool_input: dict) -> str:
+    def _execute_tool(self, name: str, args: dict) -> str:
         if name == "get_current_state":
             if not self.owner.pets:
                 return "No pets registered yet."
@@ -103,18 +150,18 @@ class PawPalAgent:
 
         if name == "add_pet":
             existing = next(
-                (p for p in self.owner.pets if p.name.lower() == tool_input["name"].lower()),
+                (p for p in self.owner.pets if p.name.lower() == args["name"].lower()),
                 None,
             )
             if existing:
-                return f"Pet '{tool_input['name']}' already exists."
+                return f"Pet '{args['name']}' already exists."
             pet = Pet(
-                name=tool_input["name"],
-                species=tool_input["species"],
-                breed=tool_input.get("breed", "Unknown"),
-                age=tool_input.get("age", 0),
+                name=args["name"],
+                species=args["species"],
+                breed=args.get("breed", "Unknown"),
+                age=args.get("age", 0),
             )
-            for need in tool_input.get("special_needs", []):
+            for need in args.get("special_needs", []):
                 pet.add_special_need(need)
             pet.generate_needs_tasks()
             self.owner.add_pet(pet)
@@ -126,20 +173,20 @@ class PawPalAgent:
             return f"Added {pet.get_info()}.{needs_msg}"
 
         if name == "add_task":
-            pet_name = tool_input["pet_name"]
+            pet_name = args["pet_name"]
             pet = next(
                 (p for p in self.owner.pets if p.name.lower() == pet_name.lower()), None
             )
             if pet is None:
                 return f"Pet '{pet_name}' not found. Add the pet first."
-            if any(t.name.lower() == tool_input["task_name"].lower() for t in pet.tasks):
-                return f"Task '{tool_input['task_name']}' already exists for {pet_name}."
+            if any(t.name.lower() == args["task_name"].lower() for t in pet.tasks):
+                return f"Task '{args['task_name']}' already exists for {pet_name}."
             task = Task(
-                name=tool_input["task_name"],
-                category=tool_input["category"],
-                duration=tool_input["duration"],
-                priority=tool_input["priority"],
-                frequency=tool_input.get("frequency", "daily"),
+                name=args["task_name"],
+                category=args["category"],
+                duration=args["duration"],
+                priority=args["priority"],
+                frequency=args.get("frequency", "daily"),
             )
             pet.add_task(task)
             return (
@@ -171,62 +218,53 @@ class PawPalAgent:
             conflicts = scheduler.detect_conflicts()
             if conflicts:
                 lines.append(f"⚠ {len(conflicts)} time conflict(s) detected!")
-            skipped = [t for t in scheduler.gather_tasks() if t not in plan and not t.completed]
+            skipped = [
+                t for t in scheduler.gather_tasks() if t not in plan and not t.completed
+            ]
             if skipped:
                 lines.append(
                     f"Skipped (didn't fit budget): {', '.join(t.name for t in skipped)}"
                 )
             return "\n".join(lines)
 
+        if name == "get_pet_care_info":
+            return knowledge_base.retrieve(
+                species=args.get("species", ""),
+                age=args.get("age", 0),
+                conditions=args.get("conditions", []),
+            )
+
         return f"Unknown tool: {name}"
 
     def chat(self, user_message: str) -> str:
-        self.history.append({"role": "user", "content": user_message})
+        response = self._chat.send_message(user_message)
 
         while True:
-            response = self.client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=1024,
-                system=[
-                    {
-                        "type": "text",
-                        "text": _SYSTEM_PROMPT,
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Owner: {self.owner.name}, "
-                            f"time budget: {self.owner.available_time} min today."
-                        ),
-                    },
-                ],
-                tools=TOOLS,
-                messages=self.history,
-            )
+            fn_calls = [
+                p for p in response.candidates[0].content.parts
+                if p.function_call and p.function_call.name
+            ]
 
-            self.history.append({"role": "assistant", "content": response.content})
+            if not fn_calls:
+                text_parts = [
+                    p.text for p in response.candidates[0].content.parts
+                    if p.text
+                ]
+                return " ".join(text_parts) if text_parts else "Done."
 
-            if response.stop_reason == "end_turn":
-                for block in response.content:
-                    if hasattr(block, "text"):
-                        return block.text
-                return "Done."
-
-            if response.stop_reason == "tool_use":
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        result = self._execute_tool(block.name, block.input)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block.id,
-                                "content": result,
-                            }
+            results = []
+            for part in fn_calls:
+                result = self._execute_tool(
+                    part.function_call.name,
+                    dict(part.function_call.args),
+                )
+                results.append(
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            name=part.function_call.name,
+                            response={"result": result},
                         )
-                self.history.append({"role": "user", "content": tool_results})
-            else:
-                break
+                    )
+                )
 
-        return "Something went wrong with the AI response."
+            response = self._chat.send_message(results)

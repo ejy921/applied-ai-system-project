@@ -2,10 +2,24 @@
 
 ```mermaid
 flowchart TD
-    subgraph INPUT["Human Input  ·  app.py / Streamlit"]
+    subgraph INPUT["Human Input  ·  app.py / Streamlit (manual forms)"]
         A["Owner\nname · time budget (minutes/day)"]
         B["Pet\nspecies · breed · age · special needs"]
         C["Task\ntitle · category · duration · priority · frequency"]
+    end
+
+    subgraph AI["AI Layer  ·  agent.py + knowledge_base.py"]
+        direction TB
+        AI_A["User chat message\n(natural language)"]
+        AI_B["PawPalAgent.chat()\nGemini gemini-2.0-flash"]
+        AI_C["Tool call: get_pet_care_info\nspecies · age · conditions"]
+        AI_D["KnowledgeBase.retrieve()\n12 tagged entries · tag-set intersection"]
+        AI_E["Tool calls: add_pet · add_task\ngenerate_schedule"]
+        AI_A --> AI_B
+        AI_B -- "① RAG lookup" --> AI_C
+        AI_C --> AI_D
+        AI_D -- "care guidelines text" --> AI_B
+        AI_B -- "② create objects" --> AI_E
     end
 
     subgraph DATA["Data Model  ·  pawpal_system.py"]
@@ -49,6 +63,8 @@ flowchart TD
     D -- "owns" --> E
     E -- "owns" --> F
 
+    AI_E -- "adds pets & tasks\n(same objects as manual)" --> D
+
     F --> G
 
     K --> L
@@ -73,16 +89,18 @@ flowchart TD
 
 | Component | Role | Type |
 |---|---|---|
-| **Streamlit UI** (`app.py`) | Collects human input, renders output | Human interface |
+| **Streamlit UI** (`app.py`) | Collects human input and chat messages, renders output | Human interface |
 | **Owner / Pet / Task** (`pawpal_system.py`) | Holds all state — time budget, pet profiles, task list | Data model |
 | **Scheduler** (`pawpal_system.py`) | Retrieves, sorts, schedules, assigns times, detects conflicts | Processing engine |
+| **PawPalAgent** (`agent.py`) | Gemini-powered agent; orchestrates RAG retrieval and data model tool calls | AI layer |
+| **KnowledgeBase** (`knowledge_base.py`) | 12 tagged pet care entries; `retrieve()` matches species, age group, and condition tags | RAG retrieval |
 | **Human Review Loop** | Owner reads the plan, marks tasks done, tweaks inputs, reruns | Human-in-the-loop |
 | **pytest suite** (`tests/test_pawpal.py`) | Verifies scheduler logic across 20 edge cases | Automated testing |
 
 ## Data Flow
 
 ```
-Human input
+Manual input
     └─▶ Owner / Pet / Task objects
             └─▶ Scheduler.generate_plan()
                     ├─▶ filter due tasks per pet
@@ -94,4 +112,12 @@ Human input
                                     └─▶ Human reviews
                                             ├─▶ mark complete → new Task → back to Scheduler
                                             └─▶ adjust inputs → regenerate plan
+
+Natural language input (AI chat)
+    └─▶ PawPalAgent (Gemini function-calling loop)
+            ├─▶ get_pet_care_info → KnowledgeBase.retrieve(species, age, conditions)
+            │       └─▶ returns evidence-based guidelines (e.g. shorter walks for senior arthritic dog)
+            ├─▶ add_pet  → same Owner/Pet objects as manual path
+            ├─▶ add_task → Task parameters informed by retrieved guidelines
+            └─▶ generate_schedule → same Scheduler engine as manual path
 ```
